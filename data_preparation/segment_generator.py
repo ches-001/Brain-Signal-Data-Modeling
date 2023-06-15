@@ -1,7 +1,23 @@
-import os, glob, h5py, asyncio, tqdm
+import os, glob, h5py, asyncio, tqdm, zipfile
 import numpy as np
 from scipy.io import loadmat
 from typing import Iterable, Callable, Any
+
+def extract_files(directory: str, delete_after: bool=True):
+    for file_name in tqdm.tqdm(os.listdir(directory)):
+        if file_name.endswith('.zip'):
+            file_path = os.path.join(directory, file_name)
+
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                extract_to = file_path.replace(".zip", "")
+                if not os.path.isdir(extract_to):
+                    os.mkdir(extract_to)
+
+                zip_ref.extractall(extract_to)
+
+            if delete_after:
+                os.remove(file_path)
+
 
 def segment_eeg_sample(sample_folder: str):
     mat_files = glob.glob(os.path.join(sample_folder, "*.mat"), recursive=False)
@@ -156,15 +172,19 @@ if __name__ == "__main__":
 
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
-    nirs_data_dir = os.path.join(script_dir, "../data/samples/NIRS")
     eeg_data_dir = os.path.join(script_dir, "../data/samples/EEG")
+    nirs_data_dir = os.path.join(script_dir, "../data/samples/NIRS")
     n_concurrency = 20
 
     try:
-        logging.info("Generating Segments of EEG samples:")
+        logging.info("Extracting EEG samples:")
+        extract_files(eeg_data_dir)
+        logging.info("Generating EEG segments:")
         asyncio.run(main(eeg_data_dir, segment_eeg_sample, n_concurrency=n_concurrency))
 
-        logging.info("Generating Segments of EEG samples:")
+        logging.info("Extracting NIRS samples:")
+        extract_files(nirs_data_dir)
+        logging.info("Generating NIRS segments:")
         asyncio.run(main(nirs_data_dir, segment_nirs_sample, n_concurrency=n_concurrency))
 
     except Exception as e:
