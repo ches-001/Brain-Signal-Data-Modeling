@@ -1,4 +1,4 @@
-import os, glob, h5py, asyncio, tqdm, zipfile
+import os, glob, h5py, asyncio, tqdm, zipfile, argparse
 import numpy as np
 from scipy.io import loadmat
 from typing import Iterable, Callable, Any
@@ -175,6 +175,17 @@ if __name__ == "__main__":
     eeg_data_dir = os.path.join(script_dir, "../data/samples/EEG")
     nirs_data_dir = os.path.join(script_dir, "../data/samples/NIRS")
     n_concurrency = 20
+
+    # CLI Parsed parameters
+    parser = argparse.ArgumentParser(description=f"Segments Generator")
+    parser.add_argument("--eeg_path", type=str, default=eeg_data_dir, metavar='', help='EEG data path')
+    parser.add_argument("--nirs_path", type=str, default=nirs_data_dir, metavar='', help='NIRS data path')
+    parser.add_argument("--n_concurrency", type=int, default=n_concurrency, metavar='', help='Number of concurrent coroutines')
+    args = parser.parse_args()
+
+    eeg_data_dir = args.eeg_path
+    nirs_data_dir = args.nirs_path
+    n_concurrency = args.n_concurrency
 
     try:
         logging.info("Extracting EEG samples:")
