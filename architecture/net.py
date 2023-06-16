@@ -29,7 +29,7 @@ class ClassifierNet(nn.Module):
         named_modules = list(self.model.named_modules())
         self.dropout_layer = nn.Dropout(self.dropout)
         self.fc = nn.Sequential(
-            nn.GELU(),
+            #nn.GELU(),
             nn.Linear(named_modules[-1][1].in_features, self.out_features),
             nn.Softmax(dim=-1)
         )

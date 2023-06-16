@@ -1,5 +1,6 @@
 import torch, h5py, os, glob, h5py, random
 import numpy as np
+import pandas as pd
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 from typing import Optional, Tuple, Union, Iterable
@@ -73,6 +74,28 @@ class SignalDataset(Dataset):
         label = torch.nonzero(label, as_tuple=False).squeeze().long()       # label encoded
 
         return input_signal, label
+    
+    def get_sample_classes(self) -> pd.DataFrame:
+        class_df = pd.DataFrame()
+        class_df["class_label"] = [self.__getitem__(i)[1].item() for i in range(self.__len__())]
+        return class_df
+    
+    def get_sample_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        classes_df = self.get_sample_classes()
+        unique_classes = classes_df["class_label"].unique()
+        
+        class_weights = torch.zeros(unique_classes.shape)
+        for i, c in enumerate(unique_classes):
+            # smaller classes will have more weights
+            class_weights[i] = len(classes_df) / len(classes_df[classes_df["class_label"]==c])
+        class_weights /= class_weights.max()
+
+        sample_weights = torch.zeros(classes_df.shape[0])
+        for i in range(classes_df.shape[0]):
+            label = classes_df["class_label"].iloc[i]
+            sample_weights[i] = class_weights[label]
+        
+        return class_weights, sample_weights
     
     def _scale_input(self, input: np.ndarray) -> np.ndarray:
         # input shape: (time, n_channels)
