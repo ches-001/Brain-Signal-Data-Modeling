@@ -12,7 +12,7 @@ class TrainingPipeline:
                 device: str="cpu", 
                 weight_init: bool=True,
                 custom_weight_initializer: Any=None,
-                dirname: str="./model_dir", 
+                dirname: str="./saved_model", 
                 filename: str="model.pth.tar"):
         
         self.device = device

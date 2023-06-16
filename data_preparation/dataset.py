@@ -1,9 +1,11 @@
 import torch, h5py, os, glob, h5py, random
+import torch.nn as nn
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 from typing import Optional, Tuple, Union, Iterable
+from torchaudio.transforms import Spectrogram, AmplitudeToDB
 
 class SignalDataset(Dataset):
     def __init__(
@@ -17,6 +19,9 @@ class SignalDataset(Dataset):
             t_size: int = 200,
             excluded: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
+            use_spectrogram: bool=False,
+            avg_spectrogram_ch: bool = True,
+            **spectrogram_kwargs,
         ):
 
         valid_signals = ("EEG", "NIRS")
@@ -45,7 +50,31 @@ class SignalDataset(Dataset):
         self.scale_range = scale_range
         self.t_size = t_size
         self.excluded = excluded
+        self.use_spectrogram = use_spectrogram
+        self.avg_spectrogram_ch = avg_spectrogram_ch
         self.segment_files = self._get_segment_paths(excluded, sample_size)
+
+        # spectrogram arguments
+        n_fft = int(self.t_size * 0.8)
+        win_length = max(1, int(self.t_size * 0.1))
+        hop_length = max(1, win_length // 3)
+        self.spectrogram_kwargs = dict(
+            n_fft=n_fft, 
+            win_length=win_length, 
+            hop_length=hop_length, 
+            power=2, 
+            normalized=True, 
+            pad=0,
+        )
+        self.kwargs = {**spectrogram_kwargs, **self.spectrogram_kwargs}
+        self.spectrogram_model = None
+        if self.use_spectrogram:
+            self.spectrogram_model = nn.Sequential(
+                Spectrogram(**self.kwargs),
+                AmplitudeToDB(stype="power" if (self.kwargs["power"]==2) else "magnitude"),
+            )
+
+        self._class_df_cache = None
     
     def __len__(self) -> int:
         return len(self.segment_files)
@@ -69,16 +98,25 @@ class SignalDataset(Dataset):
             input_signal = self._scale_input(input_signal)
         input_signal = torch.from_numpy(input_signal)
         input_signal = input_signal.permute(1, 0)                           # shape: (time, n_channels) -> (n_channels, time)
-        input_signal = self._resize(input_signal).unsqueeze(dim=0).float()  # shape: (1, n_channels, time)
+        input_signal = self._resize(input_signal).unsqueeze(dim=0).float()  # shape: (1, n_channels, t_size)
+        
+        if self.use_spectrogram:
+            input_signal = self.spectrogram_model(input_signal).squeeze()   #shape: (n_channels, sh, sw)
+            if self.avg_spectrogram_ch:
+                input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    #shape: (1, sh, sw)
         label = torch.from_numpy(label)                                     # one hot encoded
         label = torch.nonzero(label, as_tuple=False).squeeze().long()       # label encoded
 
         return input_signal, label
     
     def get_sample_classes(self) -> pd.DataFrame:
-        class_df = pd.DataFrame()
-        class_df["class_label"] = [self.__getitem__(i)[1].item() for i in range(self.__len__())]
-        return class_df
+        if self._class_df_cache is None:
+            class_df = pd.DataFrame()
+            class_df["class_label"] = [self.__getitem__(i)[1].item() for i in range(self.__len__())]
+            self._class_df_cache = class_df
+
+            return class_df
+        return self._class_df_cache
     
     def get_sample_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
         classes_df = self.get_sample_classes()
