@@ -9,14 +9,15 @@ from torchaudio.transforms import Spectrogram, AmplitudeToDB
 
 class SignalDataset(Dataset):
     def __init__(
-            self, 
-            base_dir: str, 
+            self,
+            base_dir: str,
             signal: str,
-            task: str, 
+            task: str,
             hemoglobin: Optional[str]=None,
             scale: bool = True,
             scale_range: Tuple[float, float] = (0.0, 1.0),
             t_size: int = 200,
+            shuffle: bool = True,
             excluded: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
             use_spectrogram: bool=False,
@@ -50,6 +51,7 @@ class SignalDataset(Dataset):
         self.scale = scale
         self.scale_range = scale_range
         self.t_size = t_size
+        self.shuffle = shuffle
         self.excluded = excluded
         self.onehot_labels = onehot_labels
         self.use_spectrogram = use_spectrogram
@@ -192,7 +194,9 @@ class SignalDataset(Dataset):
             # exclude some segments if any
             segments = [segment for segment in segments if segment not in excluded]
 
-        random.shuffle(segments)
+        if self.shuffle:
+            random.shuffle(segments)
+            
         if sample_size is not None:
             if isinstance(sample_size, int):
                 return segments[:sample_size]
