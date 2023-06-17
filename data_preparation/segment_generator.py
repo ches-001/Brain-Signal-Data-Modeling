@@ -192,11 +192,13 @@ if __name__ == "__main__":
         extract_files(eeg_data_dir)
         logging.info("Generating EEG segments:")
         asyncio.run(main(eeg_data_dir, segment_eeg_sample, n_concurrency=n_concurrency))
+    except Exception as e:
+        logging.error(e)
 
+    try:
         logging.info("Extracting NIRS samples:")
         extract_files(nirs_data_dir)
         logging.info("Generating NIRS segments:")
         asyncio.run(main(nirs_data_dir, segment_nirs_sample, n_concurrency=n_concurrency))
-
     except Exception as e:
         logging.error(e)
