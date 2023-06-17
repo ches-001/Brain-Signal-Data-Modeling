@@ -20,6 +20,7 @@ class SignalDataset(Dataset):
             excluded: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
             use_spectrogram: bool=False,
+            onehot_labels: bool=False,
             avg_spectrogram_ch: bool = True,
             **spectrogram_kwargs,
         ):
@@ -50,6 +51,7 @@ class SignalDataset(Dataset):
         self.scale_range = scale_range
         self.t_size = t_size
         self.excluded = excluded
+        self.onehot_labels = onehot_labels
         self.use_spectrogram = use_spectrogram
         self.avg_spectrogram_ch = avg_spectrogram_ch
         self.segment_files = self._get_segment_paths(excluded, sample_size)
@@ -104,19 +106,36 @@ class SignalDataset(Dataset):
             input_signal = self.spectrogram_model(input_signal).squeeze()   #shape: (n_channels, sh, sw)
             if self.avg_spectrogram_ch:
                 input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    #shape: (1, sh, sw)
-        label = torch.from_numpy(label)                                     # one hot encoded
-        label = torch.nonzero(label, as_tuple=False).squeeze().long()       # label encoded
-
+                
+        label = torch.from_numpy(label).float()                             # onehot encoded
+        if not self.onehot_labels:
+            label = (
+                torch
+                .nonzero(label, as_tuple=False)
+                .squeeze()
+                .long()
+            )                                                               # label encoded
         return input_signal, label
     
     def get_sample_classes(self) -> pd.DataFrame:
-        if self._class_df_cache is None:
-            class_df = pd.DataFrame()
-            class_df["class_label"] = [self.__getitem__(i)[1].item() for i in range(self.__len__())]
-            self._class_df_cache = class_df
+        if self._class_df_cache is not None:
+            return self._class_df_cache
+        
+        class_df = pd.DataFrame()
+        if self.onehot_labels:
+            get_class_val = lambda i : (
+                torch
+                .nonzero((self.__getitem__(i)[1]), as_tuple=False)
+                .squeeze()
+                .long()
+                .item()
+            )
+        else:
+            get_class_val = lambda i : self.__getitem__(i)[1].item()
+        class_df["class_label"] = [get_class_val(i) for i in range(self.__len__())]
+        self._class_df_cache = class_df
 
-            return class_df
-        return self._class_df_cache
+        return class_df
     
     def get_sample_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
         classes_df = self.get_sample_classes()

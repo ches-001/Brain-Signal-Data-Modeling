@@ -15,7 +15,8 @@ class TrainingPipeline:
                 custom_weight_initializer: Any=None,
                 dirname: str="./saved_model", 
                 filename: str="model.pth.tar",
-                save_metrics: bool=True):
+                save_metrics: bool=True, 
+                onehot_labels: bool=False):
         
         self.device = device
         self.model = model.to(self.device)
@@ -26,6 +27,7 @@ class TrainingPipeline:
         self.dirname = dirname
         self.filename = filename
         self.save_metrics = save_metrics
+        self.onehot_labels = onehot_labels
         
         if self.weight_init:
             if self.custom_weight_initializer:
@@ -104,7 +106,10 @@ class TrainingPipeline:
                 self.optimizer.zero_grad()
             
             preds = probs.argmax(dim=1).cpu().numpy()
-            labels = labels.cpu().numpy()
+            if self.onehot_labels:
+                labels = labels.argmax(dim=1).cpu().numpy()
+            else:
+                labels = labels.cpu().numpy()
             batch_acc = accuracy_score(preds, labels)
             
             loss += batch_loss.item()
