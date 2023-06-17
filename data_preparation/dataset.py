@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 from torch.nn import functional as F
-from typing import Optional, Tuple, Union, Iterable
+from typing import Optional, Tuple, Union, Iterable, Callable
 from torchaudio.transforms import Spectrogram, AmplitudeToDB
 
 class SignalDataset(Dataset):
@@ -17,6 +17,8 @@ class SignalDataset(Dataset):
             scale: bool = True,
             scale_range: Tuple[float, float] = (0.0, 1.0),
             t_size: int = 200,
+            transforms: Optional[Callable]=None,
+            transforms_p: float=0.0,
             shuffle: bool = True,
             excluded: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
@@ -51,6 +53,8 @@ class SignalDataset(Dataset):
         self.scale = scale
         self.scale_range = scale_range
         self.t_size = t_size
+        self.transforms = transforms
+        self.transforms_p = transforms_p
         self.shuffle = shuffle
         self.excluded = excluded
         self.onehot_labels = onehot_labels
@@ -117,6 +121,9 @@ class SignalDataset(Dataset):
                 .squeeze()
                 .long()
             )                                                               # label encoded
+        if self.transforms:
+            if self.transforms_p > np.random.random():
+                input_signal = self.transforms(input_signal)
         return input_signal, label
     
     def get_sample_classes(self) -> pd.DataFrame:
