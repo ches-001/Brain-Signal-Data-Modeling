@@ -4,23 +4,26 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 from torch.nn import functional as F
-from typing import Optional, Tuple, Union, Iterable, Callable
+from typing import Optional, Tuple, Union, Iterable, Callable, Any
 from torchaudio.transforms import Spectrogram, AmplitudeToDB
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 class SignalDataset(Dataset):
     def __init__(
             self,
             base_dir: str,
+            *,
             signal: str,
             task: str,
+            meta_df: pd.DataFrame,
             hemoglobin: Optional[str]=None,
             scale: bool = True,
             scale_range: Tuple[float, float] = (0.0, 1.0),
             t_size: int = 200,
             transforms: Optional[Callable]=None,
             transforms_p: float=0.0,
-            shuffle: bool = True,
-            excluded: Optional[Iterable[str]] = None,
+            excluded_paths: Optional[Iterable[str]] = None,
+            excluded_classes: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
             use_spectrogram: bool=False,
             onehot_labels: bool=False,
@@ -49,18 +52,23 @@ class SignalDataset(Dataset):
         self.data_dir = data_dir
         self.signal = signal
         self.task = task
+        self.meta_df = meta_df
         self.hemoglobin = hemoglobin
         self.scale = scale
         self.scale_range = scale_range
         self.t_size = t_size
         self.transforms = transforms
         self.transforms_p = transforms_p
-        self.shuffle = shuffle
-        self.excluded = excluded
         self.onehot_labels = onehot_labels
         self.use_spectrogram = use_spectrogram
         self.avg_spectrogram_ch = avg_spectrogram_ch
-        self.segment_files = self._get_segment_paths(excluded, sample_size)
+        self.meta_df = self._process_df(meta_df, excluded_paths, excluded_classes, sample_size)
+
+        self.class_label_encoder = LabelEncoder()
+        self.class_labels = self.class_label_encoder.fit_transform(self.meta_df["class_name"])
+
+        self.class_oh_encoder = OneHotEncoder()
+        self.class_ohe = self.class_oh_encoder.fit_transform(self.class_labels.reshape(-1, 1))
 
         # spectrogram arguments
         n_fft = int(self.t_size * 0.8)
@@ -84,23 +92,31 @@ class SignalDataset(Dataset):
 
         self._class_df_cache = None
     
+
     def __len__(self) -> int:
-        return len(self.segment_files)
+        return len(self.meta_df)
     
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        segment = self.segment_files[idx]
+        segment_path = self.meta_df["path"].iloc[idx]
         input_signal = None
         label = None
 
-        with h5py.File(segment, "r") as hdf_file:
+        with h5py.File(segment_path, "r") as hdf_file:
             if self.signal == "EEG":
                 input_signal = hdf_file["data"]["x"]
             else:
                 input_signal = hdf_file["data"][f"x_{self.hemoglobin}"]
 
             input_signal = np.array(input_signal)
-            label = np.array(hdf_file["data"]["ohe_y"])
         hdf_file.close()
+
+        if self.onehot_labels:
+            label = self.class_ohe[idx].toarray()
+            label = torch.from_numpy(label).squeeze().float()
+        else:
+            label = self.class_labels[idx]
+            label = torch.tensor(label).long()
 
         if self.scale:
             input_signal = self._scale_input(input_signal)
@@ -112,57 +128,34 @@ class SignalDataset(Dataset):
             input_signal = self.spectrogram_model(input_signal).squeeze()   #shape: (n_channels, sh, sw)
             if self.avg_spectrogram_ch:
                 input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    #shape: (1, sh, sw)
-                
-        label = torch.from_numpy(label).float()                             # onehot encoded
-        if not self.onehot_labels:
-            label = (
-                torch
-                .nonzero(label, as_tuple=False)
-                .squeeze()
-                .long()
-            )                                                               # label encoded
+
         if self.transforms:
             if self.transforms_p > np.random.random():
                 input_signal = self.transforms(input_signal)
+
         return input_signal, label
     
-    def get_sample_classes(self) -> pd.DataFrame:
-        if self._class_df_cache is not None:
-            return self._class_df_cache
-        
-        class_df = pd.DataFrame()
-        if self.onehot_labels:
-            get_class_val = lambda i : (
-                torch
-                .nonzero((self.__getitem__(i)[1]), as_tuple=False)
-                .squeeze()
-                .long()
-                .item()
-            )
-        else:
-            get_class_val = lambda i : self.__getitem__(i)[1].item()
-        class_df["class_label"] = [get_class_val(i) for i in range(self.__len__())]
-        self._class_df_cache = class_df
 
-        return class_df
-    
     def get_sample_weights(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        classes_df = self.get_sample_classes()
-        unique_classes = classes_df["class_label"].unique()
+        sample_classes = self.class_labels
+        unique_classes = np.unique(sample_classes)
         
-        class_weights = torch.zeros(unique_classes.shape)
+        n_classes = len(unique_classes)
+        class_weights = torch.zeros(n_classes)
         for i, c in enumerate(unique_classes):
             # smaller classes will have more weights
-            class_weights[i] = len(classes_df) / len(classes_df[classes_df["class_label"]==c])
+            class_weights[i] = len(sample_classes) / len(sample_classes[sample_classes==c])
         class_weights /= class_weights.max()
 
-        sample_weights = torch.zeros(classes_df.shape[0])
-        for i in range(classes_df.shape[0]):
-            label = classes_df["class_label"].iloc[i]
+        n_samples = len(sample_classes)
+        sample_weights = torch.zeros(n_samples)
+        for i in range(n_samples):
+            label = sample_classes[i]
             sample_weights[i] = class_weights[label]
         
         return class_weights, sample_weights
     
+
     def _scale_input(self, input: np.ndarray) -> np.ndarray:
         # input shape: (time, n_channels)
         output = (input - input.min()) / (input.max() - input.min())
@@ -170,6 +163,7 @@ class SignalDataset(Dataset):
         output = (b - a) * output + a
         return output
     
+
     def _resize(self, input: torch.Tensor) -> torch.Tensor:
         # input shape: (n_channels, time)
         c, t = input.shape
@@ -178,38 +172,34 @@ class SignalDataset(Dataset):
         # input shape: (n_channels, self.t_size)
         return output.squeeze()
     
+
     def get_label_names(self) -> Iterable[str]:
-        with h5py.File(self.segment_files[0], "r") as hdf_file:
-            class_names = list(hdf_file["data"]["class_names"])
-        hdf_file.close()
+        class_names = self.meta_df["class_name"].unique()
         return class_names
+    
 
-    def _get_segment_paths(
-            self, 
-            excluded: Optional[Iterable[str]],
-            sample_size: Optional[Union[int, float]]) -> Iterable[str]:
+    def _process_df(
+            self, meta_df: pd.DataFrame,
+            excluded_paths: Optional[Iterable[str]], 
+            excluded_classes: Optional[Iterable[str]],
+            sample_size: Optional[Union[int, float]]) -> pd.DataFrame:
         
-        segments_foldername = f"{self.task}_segments"
-        segments = []
-        for sample_dir in os.listdir(self.data_dir):
-            sample_dir = os.path.join(self.data_dir, sample_dir)
-            segment_dir  = os.path.join(sample_dir, segments_foldername)
-            segment_files = glob.glob(os.path.join(segment_dir, "*.h5"), recursive=False)
-            segments.extend(segment_files)
+        df = meta_df.copy()
+        if excluded_paths is not None:
+            df = df[~df["path"].isin(excluded_paths)]
 
-        if excluded is not None:
-            # exclude some segments if any
-            segments = [segment for segment in segments if segment not in excluded]
+        df = df[df["datatype"] == self.signal]
+        df = df[df["task"] == self.task]
+        
+        if excluded_classes is not None:
+            df = df[~df["class_name"].isin(excluded_classes)]
 
-        if self.shuffle:
-            random.shuffle(segments)
-            
         if sample_size is not None:
             if isinstance(sample_size, int):
-                return segments[:sample_size]
+                return df.iloc[:sample_size]
             elif isinstance(sample_size, float):
-                sample_size = int(sample_size * len(segments))
-                return segments[:sample_size]
+                sample_size = int(sample_size * len(df))
+                return df.iloc[:sample_size]
             else:
                 raise ValueError("Invalid value for sample_size")
-        return segments
+        return df

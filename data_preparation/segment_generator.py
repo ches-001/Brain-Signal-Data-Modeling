@@ -1,7 +1,56 @@
 import os, glob, h5py, asyncio, tqdm, zipfile, argparse
 import numpy as np
+import pandas as pd
 from scipy.io import loadmat
 from typing import Iterable, Callable, Any
+
+
+class Queue:
+    def __init__(self):
+        self.paths = list()
+        self.tasks = list()
+        self.datatypes = list()
+        self.class_names = list()
+
+    def __len__(self):
+        if len(self.paths) == len(self.tasks) == len(self.class_names):
+            return len(self.paths)
+        
+        raise Exception(
+            (
+                f"paths, tasks and classes attributes are not of same length, "
+                f"got {len(self.paths)}, {len(self.tasks)} and {len(self.class_names)} "
+                "for each."
+            )
+        )
+        
+    def enqueue(self, path: str, task: str, datatype: str, class_name: str):
+        self.paths.append(path)
+        self.tasks.append(task)
+        self.datatypes.append(datatype)
+        self.class_names.append(class_name)
+    
+    def dequeue(self, idx:str):
+        self.paths.pop(idx)
+        self.tasks.pop(idx)
+        self.datatypes.pop(idx)
+        self.class_names.pop(idx)
+    
+    def __repr__(self):
+        return f'{self.paths}'
+    
+    def __getiitem__(self, idx: int):
+        return self.paths[idx], self.tasks[idx], self.datatypes, self.class_names[idx]
+    
+    def save(self, path: str) -> pd.DataFrame:
+        df = pd.DataFrame()
+        df["path"] = self.paths
+        df["task"] = self.tasks
+        df["datatype"] = self.datatypes
+        df["class_name"] = self.class_names
+        df.to_csv(path, index=False)
+        return df
+    
 
 def extract_files(directory: str, delete_after: bool=True):
     for file_name in tqdm.tqdm(os.listdir(directory)):
@@ -19,7 +68,7 @@ def extract_files(directory: str, delete_after: bool=True):
                 os.remove(file_path)
 
 
-def segment_eeg_sample(sample_folder: str):
+def segment_eeg_sample(sample_folder: str, queue: Queue):
     mat_files = glob.glob(os.path.join(sample_folder, "*.mat"), recursive=False)
     nback_files = [file for file in mat_files if "nback.mat" in file]
     dsr_files = [file for file in mat_files if "dsr.mat" in file]
@@ -43,6 +92,7 @@ def segment_eeg_sample(sample_folder: str):
         if not os.path.isdir(task_segments_path): 
             os.mkdir(task_segments_path)
 
+        title = sample_cnt["title"][0][0][0]                                       # title
         cnt_sfreq = sample_cnt["fs"][0][0][0][0]                                   # sample frequency
         cnt_signals = sample_cnt["x"][0][0]
         cnt_event_onset = sample_mrk["time"][0][0].reshape(-1)                     # event / epoch onsets (millisecs)
@@ -61,21 +111,23 @@ def segment_eeg_sample(sample_folder: str):
         for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
 
             segment_file = os.path.join(task_segments_path, f"seg{i}.h5")
-            if os.path.isfile(segment_file):
-                continue
-            
-            #save each segment in a h5 file
-            with h5py.File(segment_file, "w") as hdf_file:
-                group = hdf_file.create_group("data")
-                group["timestep_indices"] = np.array([start, end])
-                group["x"] = cnt_signals[start:end]
-                group["y"] = event_label
-                group["ohe_y"] = ohe_event_label
-                group["class_names"] = class_names
-            hdf_file.close()
+
+            if not os.path.isfile(segment_file):
+                #save each segment in a h5 file
+                with h5py.File(segment_file, "w") as hdf_file:
+                    group = hdf_file.create_group("data")
+                    group["timestep_indices"] = np.array([start, end])
+                    group["x"] = cnt_signals[start:end]
+                    group["y"] = event_label
+                    group["ohe_y"] = ohe_event_label
+                    group["class_names"] = class_names
+                hdf_file.close()
+
+            class_idx = np.nonzero(ohe_event_label)[0][0]
+            queue.enqueue(segment_file, title, "EEG", class_names[class_idx])
 
 
-def segment_nirs_sample(sample_folder: str):
+def segment_nirs_sample(sample_folder: str, queue: Queue):
     mat_files = glob.glob(os.path.join(sample_folder, "*.mat"), recursive=False)
     nback_files = [file for file in mat_files if "nback.mat" in file]
     dsr_files = [file for file in mat_files if "dsr.mat" in file]
@@ -103,6 +155,7 @@ def segment_nirs_sample(sample_folder: str):
         if not os.path.isdir(task_segments_path): 
             os.mkdir(task_segments_path)
 
+        title = sample_oxy["title"][0][0][0]                                         # title
         oxy_signals = sample_oxy["x"][0][0]                                          # Oxygenated hemoglobin (oxy-Hb):
         deoxy_signals = sample_deoxy["x"][0][0]                                      # Deoxygenated hemoglobin (deoxy-Hb):
         cnt_sfreq = sample_oxy["fs"][0][0][0][0]                                     # sample frequency
@@ -122,19 +175,21 @@ def segment_nirs_sample(sample_folder: str):
         for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
 
             segment_file = os.path.join(task_segments_path, f"seg{i}.h5")
-            if os.path.isfile(segment_file):
-                continue
-            
-            #save each segment in a h5 file
-            with h5py.File(segment_file, "w") as hdf_file:
-                group = hdf_file.create_group("data")
-                group["timestep_indices"] = np.array([start, end])
-                group["x_oxy"] = oxy_signals[start:end]
-                group["x_deoxy"] = deoxy_signals[start:end]
-                group["y"] = event_label
-                group["ohe_y"] = ohe_event_label
-                group["class_names"] = class_names
-            hdf_file.close()
+
+            if not os.path.isfile(segment_file):            
+                #save each segment in a h5 file
+                with h5py.File(segment_file, "w") as hdf_file:
+                    group = hdf_file.create_group("data")
+                    group["timestep_indices"] = np.array([start, end])
+                    group["x_oxy"] = oxy_signals[start:end]
+                    group["x_deoxy"] = deoxy_signals[start:end]
+                    group["y"] = event_label
+                    group["ohe_y"] = ohe_event_label
+                    group["class_names"] = class_names
+                hdf_file.close()
+
+            class_idx = np.nonzero(ohe_event_label)[0][0]
+            queue.enqueue(segment_file, title, "NIRS", class_names[class_idx])
 
 
 async def segmentor_coroutine(
@@ -152,13 +207,14 @@ async def main(
         base_dir: str, 
         base_func: Callable,
         *,
+        queue: Queue,
         n_concurrency: int=10):
     
     semaphore = asyncio.Semaphore(n_concurrency)
     tasks = [
         segmentor_coroutine(
             base_func, 
-            args=(os.path.join(base_dir, sample_dir), ), 
+            args=(os.path.join(base_dir, sample_dir), queue), 
             semaphore=semaphore
         ) 
         for sample_dir in os.listdir(base_dir)
@@ -174,6 +230,8 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(script_path)
     eeg_data_dir = os.path.join(script_dir, "../data/samples/EEG")
     nirs_data_dir = os.path.join(script_dir, "../data/samples/NIRS")
+    eeg_csv_path = os.path.join(script_dir, "../data/samples/EEG.csv")
+    nirs_csv_path = os.path.join(script_dir, "../data/samples/NIRS.csv")
     n_concurrency = 20
 
     # CLI Parsed parameters
@@ -188,17 +246,21 @@ if __name__ == "__main__":
     n_concurrency = args.n_concurrency
 
     try:
+        eeg_queue = Queue()
         logging.info("Extracting EEG samples:")
         extract_files(eeg_data_dir)
         logging.info("Generating EEG segments:")
-        asyncio.run(main(eeg_data_dir, segment_eeg_sample, n_concurrency=n_concurrency))
+        asyncio.run(main(eeg_data_dir, segment_eeg_sample, queue=eeg_queue, n_concurrency=n_concurrency))
+        eeg_queue.save(eeg_csv_path)
     except Exception as e:
         logging.error(e)
 
     try:
+        nirs_queue = Queue()
         logging.info("Extracting NIRS samples:")
         extract_files(nirs_data_dir)
         logging.info("Generating NIRS segments:")
-        asyncio.run(main(nirs_data_dir, segment_nirs_sample, n_concurrency=n_concurrency))
+        asyncio.run(main(nirs_data_dir, segment_nirs_sample, queue=nirs_queue, n_concurrency=n_concurrency))
+        nirs_queue.save(nirs_csv_path)
     except Exception as e:
         logging.error(e)
