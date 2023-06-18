@@ -246,6 +246,8 @@ if __name__ == "__main__":
     eeg_data_dir = args.eeg_path
     nirs_data_dir = args.nirs_path
     n_concurrency = args.n_concurrency
+    eeg_csv_path = args.eeg_csv_path
+    nirs_csv_path = args.nirs_csv_path
 
     try:
         eeg_queue = Queue()
