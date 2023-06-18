@@ -238,6 +238,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=f"Segments Generator")
     parser.add_argument("--eeg_path", type=str, default=eeg_data_dir, metavar='', help='EEG data path')
     parser.add_argument("--nirs_path", type=str, default=nirs_data_dir, metavar='', help='NIRS data path')
+    parser.add_argument("--eeg_csv_path", type=str, default=eeg_csv_path, metavar='', help='EEG csv meta data path')
+    parser.add_argument("--nirs_csv_path", type=str, default=nirs_csv_path, metavar='', help='NIRS csv meta data path')
     parser.add_argument("--n_concurrency", type=int, default=n_concurrency, metavar='', help='Number of concurrent coroutines')
     args = parser.parse_args()
 
