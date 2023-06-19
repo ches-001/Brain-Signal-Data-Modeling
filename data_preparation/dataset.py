@@ -1,4 +1,4 @@
-import torch, h5py, os, glob, h5py, random
+import torch, h5py, os, h5py
 import torch.nn as nn
 import numpy as np
 import pandas as pd
@@ -26,6 +26,7 @@ class SignalDataset(Dataset):
             excluded_classes: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
             use_spectrogram: bool=False,
+            use_rp: bool=False,
             onehot_labels: bool=False,
             avg_spectrogram_ch: bool = True,
             **spectrogram_kwargs,
@@ -47,6 +48,9 @@ class SignalDataset(Dataset):
         data_dir = os.path.join(base_dir, signal)
         if not os.path.isdir(data_dir):
             raise OSError(f"No such directory {data_dir}")
+        
+        if use_rp and use_spectrogram:
+            raise ValueError("use_rp and use_spectrogram cannot be True at once")
 
         self.base_dir = base_dir
         self.data_dir = data_dir
@@ -61,6 +65,7 @@ class SignalDataset(Dataset):
         self.transforms_p = transforms_p
         self.onehot_labels = onehot_labels
         self.use_spectrogram = use_spectrogram
+        self.use_rp = use_rp
         self.avg_spectrogram_ch = avg_spectrogram_ch
         self.meta_df = self._process_df(meta_df, excluded_paths, excluded_classes, sample_size)
 
@@ -125,13 +130,22 @@ class SignalDataset(Dataset):
         input_signal = self._resize(input_signal).unsqueeze(dim=0).float()  # shape: (1, n_channels, t_size)
         
         if self.use_spectrogram:
-            input_signal = self.spectrogram_model(input_signal).squeeze()   #shape: (n_channels, sh, sw)
+            # generate spectrogram and average channels
+            input_signal = self.spectrogram_model(input_signal).squeeze()   # shape: (n_channels, sh, sw)
             if self.avg_spectrogram_ch:
-                input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    #shape: (1, sh, sw)
-
+                input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    # shape: (1, sh, sw)
+        
         if self.transforms:
             if self.transforms_p > np.random.random():
                 input_signal = self.transforms(input_signal)
+
+        if self.use_rp:
+            # generate recurrence plot and average channels
+            input_signal = input_signal.squeeze()
+            input_signal = torch.abs(input_signal.unsqueeze(1) - input_signal.unsqueeze(2))
+            input_signal[input_signal > 0.1] = 1
+            input_signal[input_signal < 0.1] = 0
+            input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)        # shape: (1, t_size, t_size)
 
         return input_signal, label
     
