@@ -104,9 +104,8 @@ def save_segment(
 
     zipped = zip(start_times, end_times, cnt_event_classes, cnt_ohe_event_classes)
     for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
-
         if max_timesteps is None or end - start <= max_timesteps:
-            segment_file = os.path.join(task_segments_path, f"seg{i}-0.h5")
+            segment_file = os.path.join(task_segments_path, f"seg{i}.h5")
             if not os.path.isfile(segment_file):
                 #save each segment in a h5 file
                 with h5py.File(segment_file, "w") as hdf_file:
@@ -124,16 +123,18 @@ def save_segment(
         else:
             cnt_len = (end - start)
             for j, sub_start in enumerate(range(0, cnt_len, max_timesteps)):
-                if sub_start == max_timesteps:
+                segment_file = os.path.join(task_segments_path, f"seg{i}-{j}.h5")
+                chunck_slice = slice(sub_start, sub_start+max_timesteps)
+                # ignore empty arrays
+                if len(cnt_signals[start:end][chunck_slice]) == 0:
                     continue
-                segment_file = os.path.join(task_segments_path, f"seg{i}-{j+1}.h5")
                 if not os.path.isfile(segment_file):
                     #save each sub segment in a h5 file
                     with h5py.File(segment_file, "w") as hdf_file:
                         group = hdf_file.create_group("data")
                         if deoxy is not None:
-                            group[deoxy_tag] = deoxy_signal[start:end][sub_start:max_timesteps]
-                        group[cnt_tag] = cnt_signals[start:end][sub_start:max_timesteps]
+                            group[deoxy_tag] = deoxy_signal[start:end][chunck_slice]
+                        group[cnt_tag] = cnt_signals[start:end][chunck_slice]
                         group["y"] = event_label
                         group["ohe_y"] = ohe_event_label
                         group["class_names"] = class_names
