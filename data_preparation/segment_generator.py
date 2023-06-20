@@ -124,6 +124,8 @@ def save_segment(
         else:
             cnt_len = (end - start)
             for j, sub_start in enumerate(range(0, cnt_len, max_timesteps)):
+                if sub_start == max_timesteps:
+                    continue
                 segment_file = os.path.join(task_segments_path, f"seg{i}-{j+1}.h5")
                 if not os.path.isfile(segment_file):
                     #save each sub segment in a h5 file
