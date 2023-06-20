@@ -1,0 +1,11 @@
+numpy
+pandas
+scipy
+zipfile
+tqdm
+h5py
+argparse
+glob
+matplotlib
+seaborn
+scikit-learn
