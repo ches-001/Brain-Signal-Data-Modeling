@@ -2,7 +2,7 @@ import os, glob, h5py, asyncio, tqdm, zipfile, argparse
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
-from typing import Iterable, Callable, Any
+from typing import Iterable, Callable, Any, Tuple, Optional
 
 
 class Queue:
@@ -68,7 +68,80 @@ def extract_files(directory: str, delete_after: bool=True):
                 os.remove(file_path)
 
 
-def segment_eeg_sample(sample_folder: str, queue: Queue):
+def save_segment(
+        data_label: str,
+        task_segments_path: str,
+        cnt: Tuple[np.ndarray], 
+        cnt_tag: Tuple[str],
+        mrk: np.ndarray, 
+        queue: Queue, 
+        max_timesteps: Optional[int]=300):
+    
+    deoxy = None
+    if len(cnt) == 2:
+        cnt, deoxy = cnt
+        cnt_tag, deoxy_tag = cnt_tag
+        cnt_signals = cnt["x"][0][0]
+        deoxy_signal = cnt["x"][0][0]
+
+    else:
+        cnt = cnt[0]
+        cnt_tag = cnt_tag[0]
+        cnt_signals = cnt["x"][0][0]
+    
+    title = cnt["title"][0][0][0]                                               # title
+    cnt_sfreq = cnt["fs"][0][0][0][0]                                           # sample frequency
+    cnt_event_onset = mrk["time"][0][0].reshape(-1)                             # event / epoch onsets (millisecs)
+    cnt_event_classes = mrk["event"][0][0][0][0][0].reshape(-1)                 # classes
+    cnt_ohe_event_classes= mrk["y"][0][0].T                                     # one hot encoded classes
+    class_names = mrk["className"][0][0].reshape(-1)                            # class names
+    class_names = [i.tolist()[0] for i in class_names.tolist()]
+    time_indices = ((cnt_event_onset / 1000) * cnt_sfreq).astype(int).tolist()  # time indices of each event onset
+    time_indices.append(cnt_signals.shape[0])                                   # to capture the last segment
+
+    start_times = time_indices[:-1]
+    end_times = time_indices[1:]
+
+    zipped = zip(start_times, end_times, cnt_event_classes, cnt_ohe_event_classes)
+    for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
+
+        if max_timesteps is None or end - start <= max_timesteps:
+            segment_file = os.path.join(task_segments_path, f"seg{i}-0.h5")
+            if not os.path.isfile(segment_file):
+                #save each segment in a h5 file
+                with h5py.File(segment_file, "w") as hdf_file:
+                    group = hdf_file.create_group("data")
+                    if deoxy is not None:
+                        group[deoxy_tag] = deoxy_signal[start:end]
+                    group[cnt_tag] = cnt_signals[start:end]
+                    group["y"] = event_label
+                    group["ohe_y"] = ohe_event_label
+                    group["class_names"] = class_names
+                hdf_file.close()
+            class_idx = np.nonzero(ohe_event_label)[0][0]
+            queue.enqueue(segment_file, title, data_label, class_names[class_idx])
+
+        else:
+            cnt_len = (end - start)
+            for j, sub_start in enumerate(range(0, cnt_len, max_timesteps)):
+                segment_file = os.path.join(task_segments_path, f"seg{i}-{j+1}.h5")
+                if not os.path.isfile(segment_file):
+                    #save each sub segment in a h5 file
+                    with h5py.File(segment_file, "w") as hdf_file:
+                        group = hdf_file.create_group("data")
+                        if deoxy is not None:
+                            group[deoxy_tag] = deoxy_signal[start:end][sub_start:max_timesteps]
+                        group[cnt_tag] = cnt_signals[start:end][sub_start:max_timesteps]
+                        group["y"] = event_label
+                        group["ohe_y"] = ohe_event_label
+                        group["class_names"] = class_names
+                    hdf_file.close()
+                class_idx = np.nonzero(ohe_event_label)[0][0]
+                queue.enqueue(segment_file, title, data_label, class_names[class_idx])
+
+
+
+def segment_eeg_sample(sample_folder: str, queue: Queue, max_timesteps: Optional[int]=None):
     mat_files = glob.glob(os.path.join(sample_folder, "*.mat"), recursive=False)
     nback_files = [file for file in mat_files if "nback.mat" in file]
     dsr_files = [file for file in mat_files if "dsr.mat" in file]
@@ -91,43 +164,18 @@ def segment_eeg_sample(sample_folder: str, queue: Queue):
         task_segments_path = os.path.join(sample_folder, f"{tl}_segments")
         if not os.path.isdir(task_segments_path): 
             os.mkdir(task_segments_path)
-
-        title = sample_cnt["title"][0][0][0]                                       # title
-        cnt_sfreq = sample_cnt["fs"][0][0][0][0]                                   # sample frequency
-        cnt_signals = sample_cnt["x"][0][0]
-        cnt_event_onset = sample_mrk["time"][0][0].reshape(-1)                     # event / epoch onsets (millisecs)
-        cnt_event_classes = sample_mrk["event"][0][0][0][0][0].reshape(-1)         # classes
-        cnt_ohe_event_classes= sample_mrk["y"][0][0].T                             # one hot encoded classes
-        class_names = sample_mrk["className"][0][0].reshape(-1)                    # class names
-        class_names = [i.tolist()[0] for i in class_names.tolist()]
-        time_indices = ((cnt_event_onset / 1000) * cnt_sfreq).astype(int).tolist() # time indices of each event onset
-        time_indices.append(cnt_signals.shape[0])                                  # to capture the last segment
+            
+        save_segment(
+            "EEG", 
+            task_segments_path, 
+            (sample_cnt, ), 
+            ("x", ), 
+            sample_mrk, 
+            queue, 
+            max_timesteps)
 
 
-        start_times = time_indices[:-1]
-        end_times = time_indices[1:]
-
-        zipped = zip(start_times, end_times, cnt_event_classes, cnt_ohe_event_classes)
-        for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
-
-            segment_file = os.path.join(task_segments_path, f"seg{i}.h5")
-
-            if not os.path.isfile(segment_file):
-                #save each segment in a h5 file
-                with h5py.File(segment_file, "w") as hdf_file:
-                    group = hdf_file.create_group("data")
-                    group["timestep_indices"] = np.array([start, end])
-                    group["x"] = cnt_signals[start:end]
-                    group["y"] = event_label
-                    group["ohe_y"] = ohe_event_label
-                    group["class_names"] = class_names
-                hdf_file.close()
-
-            class_idx = np.nonzero(ohe_event_label)[0][0]
-            queue.enqueue(segment_file, title, "EEG", class_names[class_idx])
-
-
-def segment_nirs_sample(sample_folder: str, queue: Queue):
+def segment_nirs_sample(sample_folder: str, queue: Queue, max_timesteps: Optional[int]=None):
     mat_files = glob.glob(os.path.join(sample_folder, "*.mat"), recursive=False)
     nback_files = [file for file in mat_files if "nback.mat" in file]
     dsr_files = [file for file in mat_files if "dsr.mat" in file]
@@ -155,41 +203,14 @@ def segment_nirs_sample(sample_folder: str, queue: Queue):
         if not os.path.isdir(task_segments_path): 
             os.mkdir(task_segments_path)
 
-        title = sample_oxy["title"][0][0][0]                                         # title
-        oxy_signals = sample_oxy["x"][0][0]                                          # Oxygenated hemoglobin (oxy-Hb):
-        deoxy_signals = sample_deoxy["x"][0][0]                                      # Deoxygenated hemoglobin (deoxy-Hb):
-        cnt_sfreq = sample_oxy["fs"][0][0][0][0]                                     # sample frequency
-        cnt_event_onset = sample_mrk["time"][0][0].reshape(-1)                       # event / epoch onsets (millisecs)
-        cnt_event_classes = sample_mrk["event"][0][0][0][0][0].reshape(-1)           # classes
-        cnt_ohe_event_classes= sample_mrk["y"][0][0].T                               # one hot encoded classes
-        class_names = sample_mrk["className"][0][0].reshape(-1)                      # class names
-        class_names = [i.tolist()[0] for i in class_names.tolist()]
-        time_indices = ((cnt_event_onset / 1000) * cnt_sfreq).astype(int).tolist()   # time indices of each event onset
-        time_indices.append(oxy_signals.shape[0])                                    # to capture the last segment
-
-
-        start_times = time_indices[:-1]
-        end_times = time_indices[1:]
-
-        zipped = zip(start_times, end_times, cnt_event_classes, cnt_ohe_event_classes)
-        for i, (start, end, event_label, ohe_event_label) in enumerate(zipped):
-
-            segment_file = os.path.join(task_segments_path, f"seg{i}.h5")
-
-            if not os.path.isfile(segment_file):            
-                #save each segment in a h5 file
-                with h5py.File(segment_file, "w") as hdf_file:
-                    group = hdf_file.create_group("data")
-                    group["timestep_indices"] = np.array([start, end])
-                    group["x_oxy"] = oxy_signals[start:end]
-                    group["x_deoxy"] = deoxy_signals[start:end]
-                    group["y"] = event_label
-                    group["ohe_y"] = ohe_event_label
-                    group["class_names"] = class_names
-                hdf_file.close()
-
-            class_idx = np.nonzero(ohe_event_label)[0][0]
-            queue.enqueue(segment_file, title, "NIRS", class_names[class_idx])
+        save_segment(
+            "NIRS", 
+            task_segments_path, 
+            (sample_oxy, sample_deoxy), 
+            ("x_oxy", "x_deoxy"), 
+            sample_mrk, 
+            queue, 
+            max_timesteps)
 
 
 async def segmentor_coroutine(
@@ -208,13 +229,14 @@ async def main(
         base_func: Callable,
         *,
         queue: Queue,
+        max_timestep: Optional[int]=None,
         n_concurrency: int=10):
     
     semaphore = asyncio.Semaphore(n_concurrency)
     tasks = [
         segmentor_coroutine(
             base_func, 
-            args=(os.path.join(base_dir, sample_dir), queue), 
+            args=(os.path.join(base_dir, sample_dir), queue, max_timestep), 
             semaphore=semaphore
         ) 
         for sample_dir in os.listdir(base_dir)
@@ -241,6 +263,8 @@ if __name__ == "__main__":
     parser.add_argument("--eeg_csv_path", type=str, default=eeg_csv_path, metavar='', help='EEG csv meta data path')
     parser.add_argument("--nirs_csv_path", type=str, default=nirs_csv_path, metavar='', help='NIRS csv meta data path')
     parser.add_argument("--n_concurrency", type=int, default=n_concurrency, metavar='', help='Number of concurrent coroutines')
+    parser.add_argument("--max_timestep", type=int, default=300, metavar='', help='Max number of timsteps per segement')
+
     args = parser.parse_args()
 
     eeg_data_dir = args.eeg_path
@@ -248,13 +272,21 @@ if __name__ == "__main__":
     n_concurrency = args.n_concurrency
     eeg_csv_path = args.eeg_csv_path
     nirs_csv_path = args.nirs_csv_path
+    max_timestep = args.max_timestep if args.max_timestep > 0 else None
 
     try:
         eeg_queue = Queue()
         logging.info("Extracting EEG samples:")
         extract_files(eeg_data_dir)
         logging.info("Generating EEG segments:")
-        asyncio.run(main(eeg_data_dir, segment_eeg_sample, queue=eeg_queue, n_concurrency=n_concurrency))
+        
+        asyncio.run(main(
+            eeg_data_dir, 
+            segment_eeg_sample, 
+            queue=eeg_queue, 
+            n_concurrency=n_concurrency, 
+            max_timestep=max_timestep
+        ))
         eeg_queue.save(eeg_csv_path)
     except Exception as e:
         logging.error(e)
@@ -264,7 +296,14 @@ if __name__ == "__main__":
         logging.info("Extracting NIRS samples:")
         extract_files(nirs_data_dir)
         logging.info("Generating NIRS segments:")
-        asyncio.run(main(nirs_data_dir, segment_nirs_sample, queue=nirs_queue, n_concurrency=n_concurrency))
+        
+        asyncio.run(main(
+            nirs_data_dir, 
+            segment_nirs_sample, 
+            queue=nirs_queue, 
+            n_concurrency=n_concurrency, 
+            max_timestep=max_timestep
+        ))
         nirs_queue.save(nirs_csv_path)
     except Exception as e:
         logging.error(e)
