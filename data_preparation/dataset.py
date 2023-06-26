@@ -78,7 +78,7 @@ class SignalDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.signal == "EEG" or self.signal == "NIRS":
             segment_path = self.meta_df["path"].iloc[idx]
-            return self._get_sample_epoch(idx, segment_path, self.signal, t_size=self.t_size)
+            return self._get_sample_epoch(idx, segment_path, self.signal, hemoglobin=self.hemoglobin, t_size=self.t_size)
 
         elif self.signal == "multimodal":
             eeg_segment_path = self.meta_df["eeg_path"].iloc[idx]
