@@ -1,7 +1,7 @@
 import torchvision, torch
 import torch.nn as nn
 
-class ClassifierNet1(nn.Module):
+class ResClassifierNet(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -11,7 +11,7 @@ class ClassifierNet1(nn.Module):
         pretrained_weights: str="DEFAULT",
         track_grads: bool=True):
       
-        super(ClassifierNet1, self).__init__()
+        super(ResClassifierNet, self).__init__()
         
         self.in_channels = in_channels
         self.out_features = out_features
@@ -52,9 +52,9 @@ class ClassifierNet1(nn.Module):
         return output
 
 
-class ClassificationNet2(nn.Module):
+class SimpleCNClassificationNet(nn.Module):
     def __init__(self, in_channels: int, input_dim: int, num_classes: int, dropout: float=0.2):
-        super(ClassificationNet2, self).__init__()
+        super(SimpleCNClassificationNet, self).__init__()
 
         self.in_channels = in_channels
         self.input_dim = input_dim
