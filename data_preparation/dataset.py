@@ -127,21 +127,20 @@ class SignalDataset(Dataset):
             input_signal = self._scale_input(input_signal)
         input_signal = torch.from_numpy(input_signal)
         input_signal = input_signal.permute(1, 0)                           # shape: (time, n_channels) -> (n_channels, time)
-        input_signal = self._resize(input_signal).unsqueeze(dim=0).float()  # shape: (1, n_channels, t_size)
+        input_signal = self._resize(input_signal).float()                   # shape: (n_channels, t_size)
         
         if self.use_spectrogram:
             # generate spectrogram and average channels
-            input_signal = self.spectrogram_model(input_signal).squeeze()   # shape: (n_channels, sh, sw)
+            input_signal = self.spectrogram_model(input_signal.unsqueeze(dim=0)).squeeze()  # shape: (n_channels, sh, sw)
             if self.avg_spectrogram_ch:
                 input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    # shape: (1, sh, sw)
         
         if self.transforms:
             if self.transforms_p > np.random.random():
-                input_signal = self.transforms(input_signal)
+                input_signal = self.transforms(input_signal.unsqueeze(dim=0)).squeeze()
 
         if self.use_rp:
             # generate recurrence plot and average channels
-            input_signal = input_signal.squeeze()
             input_signal = torch.abs(input_signal.unsqueeze(1) - input_signal.unsqueeze(2))
             input_signal[input_signal > 0.1] = 1
             input_signal[input_signal < 0.1] = 0

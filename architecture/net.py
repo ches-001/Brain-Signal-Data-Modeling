@@ -1,7 +1,7 @@
-import torchvision
+import torchvision, torch
 import torch.nn as nn
 
-class ClassifierNet(nn.Module):
+class ClassifierNet1(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -11,7 +11,7 @@ class ClassifierNet(nn.Module):
         pretrained_weights: str="DEFAULT",
         track_grads: bool=True):
       
-        super(ClassifierNet, self).__init__()
+        super(ClassifierNet1, self).__init__()
         
         self.in_channels = in_channels
         self.out_features = out_features
@@ -48,3 +48,53 @@ class ClassifierNet(nn.Module):
         output = self.fc(output)
         
         return output
+
+
+class ClassificationNet2(nn.Module):
+    def __init__(self, in_channels: int, input_dim: int, num_classes: int, dropout: float=0.2):
+        super(ClassificationNet2, self).__init__()
+
+        self.in_channels = in_channels
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.dropout = dropout
+
+        self.layer1 = nn.Sequential(
+            nn.Conv1d(self.in_channels, 128, kernel_size=2, stride=2),
+            nn.BatchNorm1d(128),
+            nn.Dropout(self.dropout),
+        )
+
+        self.layer2 = nn.Sequential(
+            nn.Conv1d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Dropout(self.dropout),
+        )
+
+        self.layer3 = nn.Sequential(
+            nn.Conv1d(256, 512, kernel_size=3, stride=2),
+            nn.ReLU(),
+        )
+
+        self.layer4 = nn.Sequential(
+            nn.Linear(self._get_fc_size(), 128),
+            nn.Dropout(self.dropout),
+            nn.Linear(128, self.num_classes),
+            nn.Softmax(dim=1)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = self.layer1(x)
+        output = self.layer2(output)
+        output = self.layer3(output)
+        output = output.reshape(output.shape[0], -1)
+        output = self.layer4(output)
+        return output
+
+
+    def _get_fc_size(self) -> int: 
+        x = torch.randn(1, self.in_channels, self.input_dim)
+        output = self.layer3(self.layer2(self.layer1(x)))
+        _, C, T = output.shape
+        return C * T

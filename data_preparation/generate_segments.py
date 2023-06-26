@@ -266,7 +266,7 @@ if __name__ == "__main__":
     parser.add_argument("--eeg_csv_path", type=str, default=eeg_csv_path, metavar='', help='EEG csv meta data path')
     parser.add_argument("--nirs_csv_path", type=str, default=nirs_csv_path, metavar='', help='NIRS csv meta data path')
     parser.add_argument("--n_concurrency", type=int, default=n_concurrency, metavar='', help='Number of concurrent coroutines')
-    parser.add_argument("--max_timestep", type=int, default=300, metavar='', help='Max number of timsteps per segement')
+    parser.add_argument("--max_timestep", type=int, default=0, metavar='', help='Max number of timsteps per segement')
 
     args = parser.parse_args()
 
