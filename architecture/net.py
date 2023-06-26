@@ -102,3 +102,37 @@ class ClassificationNet2(nn.Module):
         output = self.layer3(self.layer2(self.layer1(x)))
         _, C, T = output.shape
         return C * T
+
+
+class MultiModalClassifier(nn.Module):
+    def __init__(
+            self, 
+            eeg_model: nn.Module, 
+            nirs_oxy_model: nn.Module, 
+            nirs_deoxy_model: nn.Module, 
+            eeg_w: float=1/3, 
+            nirs_oxy_w: float=1/3,
+            nirs_deoxy_w: float=1/3):
+        
+        super(MultiModalClassifier, self).__init__()
+
+        self.eeg_model = eeg_model
+        self.nirs_oxy_model = nirs_oxy_model
+        self.nirs_deoxy_model = nirs_deoxy_model
+
+        self.eeg_w = eeg_w
+        self.nirs_oxy_w = nirs_oxy_w
+        self.nirs_deoxy_w = nirs_deoxy_w
+
+    def forward(
+            self, eeg: torch.Tensor, nirs_oxy: torch.Tensor, nirs_deoxy: torch.Tensor) -> torch.Tensor:
+        eeg_output = self.eeg_model(eeg)
+        nirs_oxy_output = self.nirs_oxy_model(nirs_oxy)
+        nirs_deoxy_output = self.nirs_deoxy_model(nirs_deoxy)
+
+        output = (
+            (self.eeg_w * eeg_output) + 
+            (self.nirs_oxy_w * nirs_oxy_output) + 
+            (self.nirs_deoxy_w * nirs_deoxy_output)
+        )
+        return output

@@ -5,7 +5,6 @@ import pandas as pd
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 from typing import Optional, Tuple, Union, Iterable, Callable, Any
-from torchaudio.transforms import Spectrogram, AmplitudeToDB
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 class SignalDataset(Dataset):
@@ -20,19 +19,18 @@ class SignalDataset(Dataset):
             scale: bool = True,
             scale_range: Tuple[float, float] = (0.0, 1.0),
             t_size: int = 200,
+            t_eeg_size: Optional[int] = None,
+            t_nirs_size: Optional[int] = None,
             transforms: Optional[Callable]=None,
             transforms_p: float=0.0,
             excluded_paths: Optional[Iterable[str]] = None,
             excluded_classes: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
-            use_spectrogram: bool=False,
             use_rp: bool=False,
             onehot_labels: bool=False,
-            avg_spectrogram_ch: bool = True,
-            **spectrogram_kwargs,
         ):
 
-        valid_signals = ("EEG", "NIRS")
+        valid_signals = ("EEG", "NIRS", "multimodal")
         if not signal or signal not in valid_signals:
             raise ValueError(f"signal can only be one of {valid_signals}, got {signal}")
         
@@ -44,16 +42,11 @@ class SignalDataset(Dataset):
             valid_hemoglobin_type = ("oxy", "deoxy")
             if hemoglobin is None or hemoglobin not in valid_hemoglobin_type:
                 raise ValueError(f"hemoglobin should be one of {valid_hemoglobin_type}, got {hemoglobin}")
-            
-        data_dir = os.path.join(base_dir, signal)
-        if not os.path.isdir(data_dir):
-            raise OSError(f"No such directory {data_dir}")
         
-        if use_rp and use_spectrogram:
-            raise ValueError("use_rp and use_spectrogram cannot be True at once")
+        if not os.path.isdir(base_dir):
+            raise OSError(f"No such directory {base_dir}")
 
         self.base_dir = base_dir
-        self.data_dir = data_dir
         self.signal = signal
         self.task = task
         self.meta_df = meta_df
@@ -61,12 +54,12 @@ class SignalDataset(Dataset):
         self.scale = scale
         self.scale_range = scale_range
         self.t_size = t_size
+        self.t_eeg_size = t_eeg_size
+        self.t_nirs_size = t_nirs_size
         self.transforms = transforms
         self.transforms_p = transforms_p
         self.onehot_labels = onehot_labels
-        self.use_spectrogram = use_spectrogram
         self.use_rp = use_rp
-        self.avg_spectrogram_ch = avg_spectrogram_ch
         self.meta_df = self._process_df(meta_df, excluded_paths, excluded_classes, sample_size)
 
         self.class_label_encoder = LabelEncoder()
@@ -74,26 +67,6 @@ class SignalDataset(Dataset):
 
         self.class_oh_encoder = OneHotEncoder()
         self.class_ohe = self.class_oh_encoder.fit_transform(self.class_labels.reshape(-1, 1))
-
-        # spectrogram arguments
-        n_fft = int(self.t_size * 0.8)
-        win_length = max(1, int(self.t_size * 0.1))
-        hop_length = max(1, win_length // 3)
-        self.spectrogram_kwargs = dict(
-            n_fft=n_fft, 
-            win_length=win_length, 
-            hop_length=hop_length, 
-            power=2, 
-            normalized=True, 
-            pad=0,
-        )
-        self.kwargs = {**spectrogram_kwargs, **self.spectrogram_kwargs}
-        self.spectrogram_model = None
-        if self.use_spectrogram:
-            self.spectrogram_model = nn.Sequential(
-                Spectrogram(**self.kwargs),
-                AmplitudeToDB(stype="power" if (self.kwargs["power"]==2) else "magnitude"),
-            )
 
         self._class_df_cache = None
     
@@ -103,15 +76,32 @@ class SignalDataset(Dataset):
     
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        segment_path = self.meta_df["path"].iloc[idx]
-        input_signal = None
-        label = None
+        if self.signal == "EEG" or self.signal == "NIRS":
+            segment_path = self.meta_df["path"].iloc[idx]
+            return self._get_sample_epoch(idx, segment_path, self.signal, t_size=self.t_size)
 
+        elif self.signal == "multimodal":
+            eeg_segment_path = self.meta_df["eeg_path"].iloc[idx]
+            nirs_segment_path = self.meta_df["nirs_path"].iloc[idx]
+            eeg_signal, _ = self._get_sample_epoch(idx, eeg_segment_path, "EEG", t_size=self.t_eeg_size)
+            nirs_oxy_signal, label = self._get_sample_epoch(idx, nirs_segment_path, "NIRS", hemoglobin="oxy", t_size=self.t_nirs_size)
+            nirs_deoxy_signal, label = self._get_sample_epoch(idx, nirs_segment_path, "NIRS", hemoglobin="deoxy", t_size=self.t_nirs_size)
+            return eeg_signal, nirs_oxy_signal, nirs_deoxy_signal, label
+        else:
+            pass
+
+    def _get_sample_epoch(
+            self, idx: int,
+            segment_path: str, 
+            signal: str, 
+            hemoglobin: Optional[str]=None, 
+            t_size: Optional[int]=None) -> Tuple[torch.Tensor, torch.Tensor]:
+        
         with h5py.File(segment_path, "r") as hdf_file:
-            if self.signal == "EEG":
+            if signal == "EEG":
                 input_signal = hdf_file["data"]["x"]
             else:
-                input_signal = hdf_file["data"][f"x_{self.hemoglobin}"]
+                input_signal = hdf_file["data"][f"x_{hemoglobin}"]
 
             input_signal = np.array(input_signal)
         hdf_file.close()
@@ -127,13 +117,7 @@ class SignalDataset(Dataset):
             input_signal = self._scale_input(input_signal)
         input_signal = torch.from_numpy(input_signal)
         input_signal = input_signal.permute(1, 0)                           # shape: (time, n_channels) -> (n_channels, time)
-        input_signal = self._resize(input_signal).float()                   # shape: (n_channels, t_size)
-        
-        if self.use_spectrogram:
-            # generate spectrogram and average channels
-            input_signal = self.spectrogram_model(input_signal.unsqueeze(dim=0)).squeeze()  # shape: (n_channels, sh, sw)
-            if self.avg_spectrogram_ch:
-                input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)    # shape: (1, sh, sw)
+        input_signal = self._resize(input_signal, t_size).float()                   # shape: (n_channels, t_size)
         
         if self.transforms:
             if self.transforms_p > np.random.random():
@@ -177,12 +161,14 @@ class SignalDataset(Dataset):
         return output
     
 
-    def _resize(self, input: torch.Tensor) -> torch.Tensor:
+    def _resize(self, input: torch.Tensor, t_size: Optional[int]=None) -> torch.Tensor:
+        if not t_size: 
+            return input
         # input shape: (n_channels, time)
         c, t = input.shape
         input = input.unsqueeze(dim=0)
-        output =  F.interpolate(input, size=(self.t_size), mode="linear", align_corners=False)
-        # input shape: (n_channels, self.t_size)
+        output =  F.interpolate(input, size=(t_size), mode="linear", align_corners=False)
+        # input shape: (n_channels, t_size)
         return output.squeeze()
     
 
@@ -192,21 +178,38 @@ class SignalDataset(Dataset):
     
 
     def _process_df(
-            self, meta_df: pd.DataFrame,
-            excluded_paths: Optional[Iterable[str]], 
-            excluded_classes: Optional[Iterable[str]],
-            sample_size: Optional[Union[int, float]]) -> pd.DataFrame:
+            self, 
+            meta_df: pd.DataFrame,
+            excluded_paths: Optional[Iterable[str]]=None, 
+            excluded_classes: Optional[Iterable[str]]=None,
+            sample_size: Optional[Union[int, float]]=None) -> pd.DataFrame:
         
+        if self.signal == "multimodal":
+            if "eeg_path" not in meta_df.columns or "nirs_path" not in meta_df.columns:
+                raise Exception(
+                    "For if signal is multimodal, meta_df must have 'eeg_path' and 'nirs_path' columns"
+                )
         df = meta_df.copy()
         if excluded_paths is not None:
-            df = df[~df["path"].isin(excluded_paths)]
+            if self.signal=="EEG" or self.signal=="NIRS":
+                df = df[~df["path"].isin(excluded_paths)]
 
-        df = df[df["datatype"] == self.signal]
+            elif self.signal == "multimodal":
+                if "EEG" in excluded_paths[0]:
+                    df = df[~df["eeg_path"].isin(excluded_paths)]
+                elif "NIRS" in excluded_paths[0]:
+                    df = df[~df["nirs_path"].isin(excluded_paths)]
+                else:
+                    pass
+            else:
+                pass
+
+        if self.signal != "multimodal":
+            df = df[df["datatype"] == self.signal]
         df = df[df["task"] == self.task]
         
         if excluded_classes is not None:
             df = df[~df["class_name"].isin(excluded_classes)]
-
         if sample_size is not None:
             if isinstance(sample_size, int):
                 return df.iloc[:sample_size]

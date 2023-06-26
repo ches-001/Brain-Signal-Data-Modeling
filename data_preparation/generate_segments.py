@@ -8,6 +8,8 @@ from typing import Iterable, Callable, Any, Tuple, Optional
 class Queue:
     def __init__(self):
         self.paths = list()
+        self.timesteps = list()
+        self.n_channels = list()
         self.tasks = list()
         self.datatypes = list()
         self.class_names = list()
@@ -24,14 +26,26 @@ class Queue:
             )
         )
         
-    def enqueue(self, path: str, task: str, datatype: str, class_name: str):
+    def enqueue(
+            self, 
+            path: str,  
+            timestep: int, 
+            n_channel: int, 
+            task: str, 
+            datatype: str, 
+            class_name: str):
+        
         self.paths.append(path)
+        self.timesteps.append(timestep)
+        self.n_channels.append(n_channel)
         self.tasks.append(task)
         self.datatypes.append(datatype)
         self.class_names.append(class_name)
     
     def dequeue(self, idx:str):
         self.paths.pop(idx)
+        self.timesteps.pop(idx)
+        self.n_channels.pop(idx)
         self.tasks.pop(idx)
         self.datatypes.pop(idx)
         self.class_names.pop(idx)
@@ -39,12 +53,21 @@ class Queue:
     def __repr__(self):
         return f'{self.paths}'
     
-    def __getiitem__(self, idx: int):
-        return self.paths[idx], self.tasks[idx], self.datatypes, self.class_names[idx]
+    def __getiitem__(self, idx: int) -> Tuple[str, int, int, str, str, str]:
+        return (
+            self.paths[idx], 
+            self.timesteps[idx], 
+            self.n_channels[idx], 
+            self.tasks[idx], 
+            self.datatypes, 
+            self.class_names[idx]
+        )
     
     def save(self, path: str) -> pd.DataFrame:
         df = pd.DataFrame()
         df["path"] = self.paths
+        df["timestep"] = self.timesteps
+        df["n_channel"] = self.n_channels
         df["task"] = self.tasks
         df["datatype"] = self.datatypes
         df["class_name"] = self.class_names
@@ -113,12 +136,13 @@ def save_segment(
                     if deoxy is not None:
                         group[deoxy_tag] = deoxy_signal[start:end]
                     group[cnt_tag] = cnt_signals[start:end]
+                    timesteps, n_channel = cnt_signals[start:end].shape
                     group["y"] = event_label
                     group["ohe_y"] = ohe_event_label
                     group["class_names"] = class_names
                 hdf_file.close()
             class_idx = np.nonzero(ohe_event_label)[0][0]
-            queue.enqueue(segment_file, title, data_label, class_names[class_idx])
+            queue.enqueue(segment_file, timesteps, n_channel, title, data_label, class_names[class_idx])
 
         else:
             cnt_len = (end - start)
@@ -135,12 +159,13 @@ def save_segment(
                         if deoxy is not None:
                             group[deoxy_tag] = deoxy_signal[start:end][chunck_slice]
                         group[cnt_tag] = cnt_signals[start:end][chunck_slice]
+                        timesteps, n_channel = cnt_signals[start:end][chunck_slice].shape
                         group["y"] = event_label
                         group["ohe_y"] = ohe_event_label
                         group["class_names"] = class_names
                     hdf_file.close()
                 class_idx = np.nonzero(ohe_event_label)[0][0]
-                queue.enqueue(segment_file, title, data_label, class_names[class_idx])
+                queue.enqueue(segment_file, timesteps, n_channel, title, data_label, class_names[class_idx])
 
 
 

@@ -80,24 +80,32 @@ class TrainingPipeline:
         print("\n\n")
         
     def train(self, dataloader: DataLoader, verbose: bool=False):
-        loss, acc, f1, precision, recall = self._feed(dataloader, "train", verbose)
-        return loss, acc, f1, precision, recall
+        return self._feed(dataloader, "train", verbose)
     
     def evaluate(self, dataloader: DataLoader, verbose: bool=False):        
         with torch.no_grad():
-            loss, acc, f1, precision, recall = self._feed(dataloader, "eval", verbose)
-            return loss, acc, f1, precision, recall
+            return self._feed(dataloader, "eval", verbose)
         
     def _feed(self, dataloader: DataLoader, mode: str, verbose: bool=False):
         assert mode in self._valid_modes(), "Invalid Mode"
         getattr(self.model, mode)()
         loss, acc, f1, precision, recall = 0, 0, 0, 0, 0
         
-        for idx, (signals, labels) in tqdm.tqdm(enumerate(dataloader)):
-            signals = signals.to(self.device)       #shape: (N, n_channels, n_time)
-            labels = labels.to(self.device)         #shape: (N, 1)    
-                        
-            probs = self.model(signals)
+        for idx, (batch) in tqdm.tqdm(enumerate(dataloader)):
+            if dataloader.dataset.signal != "multimodal":
+                signals, labels = batch
+                signals = signals.to(self.device)
+                labels = labels.to(self.device)           
+                probs = self.model(signals)
+
+            else:
+                eeg_signals, nirs_oxy_signals, nirs_deoxy_signals, labels = batch
+                eeg_signals = eeg_signals.to(self.device)
+                nirs_oxy_signals = nirs_oxy_signals.to(self.device)
+                nirs_deoxy_signals = nirs_deoxy_signals.to(self.device)
+                labels = labels.to(self.device)         
+                probs = self.model(eeg_signals, nirs_oxy_signals, nirs_deoxy_signals)
+
             batch_loss = self.lossfunc(probs, labels)
             
             if mode == "train":
