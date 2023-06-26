@@ -1,7 +1,7 @@
 import torchvision, torch
 import torch.nn as nn
 
-class ResClassifierNet(nn.Module):
+class ResClassificationNet(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -11,7 +11,7 @@ class ResClassifierNet(nn.Module):
         pretrained_weights: str="DEFAULT",
         track_grads: bool=True):
       
-        super(ResClassifierNet, self).__init__()
+        super(ResClassificationNet, self).__init__()
         
         self.in_channels = in_channels
         self.out_features = out_features
