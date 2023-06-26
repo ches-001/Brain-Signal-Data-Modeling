@@ -37,7 +37,9 @@ class ClassifierNet1(nn.Module):
         for params in self.model.parameters():
             params.requires_grad_(self.track_grads)
         
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim == 3:
+            x = x.unsqueeze(dim=1)
         if self.in_channels != 3:
             x = self.rgb_channel_projector(x)
         output = self.model(x)
@@ -85,6 +87,8 @@ class ClassificationNet2(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim == 4 and x.shape[1] == 1:
+            x = x.squeeze()
         output = self.layer1(x)
         output = self.layer2(output)
         output = self.layer3(output)
