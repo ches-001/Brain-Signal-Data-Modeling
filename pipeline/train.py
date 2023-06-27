@@ -54,6 +54,13 @@ class TrainingPipeline:
         }
         return torch.save(state_dicts, os.path.join(self.dirname, self.filename))
     
+    def load_model(self):
+        model_path = os.path.join(self.dirname, self.filename)
+        if not os.path.exists(model_path):
+            raise OSError(f"model is yet to be saved in path: {model_path}")
+        saved_params = torch.load(model_path, map_location=self.device)
+        return self.model.load_state_dict(saved_params["network_params"])
+    
     def collect_metric(self) -> Tuple[Dict[str, Iterable[float]], Dict[str, Iterable[float]]]:
         if self.save_metrics:
             return self._train_metrics_dict, self._eval_metrics_dict
