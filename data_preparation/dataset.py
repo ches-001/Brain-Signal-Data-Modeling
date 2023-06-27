@@ -27,6 +27,8 @@ class SignalDataset(Dataset):
             excluded_classes: Optional[Iterable[str]] = None,
             sample_size: Optional[Union[int, float]] = None,
             use_rp: bool=False,
+            rp_threshold: float=0.2,
+            average_rp_channels: bool=True,
             onehot_labels: bool=False,
         ):
 
@@ -60,6 +62,8 @@ class SignalDataset(Dataset):
         self.transforms_p = transforms_p
         self.onehot_labels = onehot_labels
         self.use_rp = use_rp
+        self.rp_threshold = rp_threshold
+        self.average_rp_channels = average_rp_channels
         self.meta_df = self._process_df(meta_df, excluded_paths, excluded_classes, sample_size)
 
         self.class_label_encoder = LabelEncoder()
@@ -116,8 +120,8 @@ class SignalDataset(Dataset):
         if self.scale:
             input_signal = self._scale_input(input_signal)
         input_signal = torch.from_numpy(input_signal)
-        input_signal = input_signal.permute(1, 0)                           # shape: (time, n_channels) -> (n_channels, time)
-        input_signal = self._resize(input_signal, t_size).float()                   # shape: (n_channels, t_size)
+        input_signal = input_signal.permute(1, 0)                         # shape: (time, n_channels) -> (n_channels, time)
+        input_signal = self._resize(input_signal, t_size).float()         # shape: (n_channels, t_size)
         
         if self.transforms:
             if self.transforms_p > np.random.random():
@@ -126,9 +130,10 @@ class SignalDataset(Dataset):
         if self.use_rp:
             # generate recurrence plot and average channels
             input_signal = torch.abs(input_signal.unsqueeze(1) - input_signal.unsqueeze(2))
-            input_signal[input_signal > 0.1] = 1
-            input_signal[input_signal < 0.1] = 0
-            input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)        # shape: (1, t_size, t_size)
+            input_signal[input_signal > self.rp_threshold] = 1
+            input_signal[input_signal <= self.rp_threshold] = 0
+            if self.average_rp_channels:
+                input_signal = input_signal.mean(dim=0).unsqueeze(dim=0)  # shape: (1, t_size, t_size)
 
         return input_signal, label
     
